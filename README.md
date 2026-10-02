@@ -1,3 +1,14 @@
+---
+title: Advanced AI Counsellor
+emoji: 🤖
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+
 # Advanced AI Student Counsellor
 
 A LangGraph-based multi-agent counselling application with a Head Counsellor, Supervisor, specialist panel, transparent orchestration trace, and per-student RAG document upload.
