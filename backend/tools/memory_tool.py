@@ -66,7 +66,7 @@ class CandidateMemoryStore:
         try:
             params = {
                 "candidate_id": f"eq.{candidate_id}",
-                "select": "id,candidate_id,user_message,counsellor_response,query_summary,established_facts,created_at",
+                "select": "id,candidate_id,session_id,user_message,counsellor_response,query_summary,established_facts,created_at",
                 "order": "created_at.desc",
                 "limit": str(limit),
             }
@@ -110,7 +110,7 @@ class CandidateMemoryStore:
         try:
             params = {
                 "candidate_id": f"eq.{candidate_id}",
-                "select": "id,candidate_id,fact_text,source_memory_id,created_at,updated_at",
+                "select": "id,candidate_id,fact_text,source_memory_id,source_type,source_reference,created_at,updated_at",
                 "order": "updated_at.desc",
                 "limit": str(limit),
             }
@@ -122,7 +122,10 @@ class CandidateMemoryStore:
             logger.warning("Candidate facts lookup skipped: %s", exc)
             return []
 
-    def save_facts(self, candidate_id: str, facts: List[str]) -> bool:
+    def save_facts(self, candidate_id: str, facts: List[str],
+                   source_type: str = "conversation",
+                   source_reference: Optional[str] = None) -> bool:
+        """Upsert durable facts with provenance. Existing callers remain compatible."""
         clean = []
         seen = set()
         for fact in facts or []:
@@ -133,7 +136,12 @@ class CandidateMemoryStore:
                 clean.append(value)
         if not self.enabled or not candidate_id or not clean:
             return False
-        rows = [{"candidate_id": candidate_id, "fact_text": fact} for fact in clean]
+        rows = [{
+            "candidate_id": candidate_id,
+            "fact_text": fact,
+            "source_type": source_type,
+            "source_reference": source_reference,
+        } for fact in clean]
         try:
             with httpx.Client(timeout=20.0) as client:
                 r = client.post(
@@ -146,6 +154,12 @@ class CandidateMemoryStore:
         except Exception as exc:
             logger.warning("Candidate facts save skipped: %s", exc)
             return False
+
+    def candidate_exists(self, candidate_id: str) -> bool:
+        """True when this candidate already has durable facts or counselling episodes."""
+        if not candidate_id:
+            return False
+        return bool(self.facts(candidate_id, limit=1) or self.recent(candidate_id, limit=1))
 
     def search_global(self, query: str, limit: int = 3,
                       threshold: Optional[float] = None) -> List[Dict[str, Any]]:

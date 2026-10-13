@@ -31,6 +31,7 @@ def _to_context(items, memory_kind: str, limit: int = 5):
         "established_facts": x.get("established_facts") or [],
         "similarity": x.get("similarity", 0.0),
         "created_at": x.get("created_at"),
+        "session_id": x.get("session_id"),
         "memory_kind": memory_kind,
     } for x in items[:limit]]
 
@@ -59,6 +60,8 @@ def memory_lookup_node(state: dict) -> dict:
     candidate_id = state.get("candidate_id") or state.get("student_id") or "default"
     messages = state.get("messages", [])
     latest_user = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    session_id = state.get("session_id") or "legacy"
+    candidate_status = "returning" if candidate_memory.candidate_exists(candidate_id) else "new"
 
     # 1) Explicit personal recall: durable facts + recent episodes for THIS candidate.
     if _is_explicit_memory_recall(latest_user):
@@ -70,7 +73,10 @@ def memory_lookup_node(state: dict) -> dict:
                 "previous_user_message": "[Durable candidate facts]",
                 "previous_counsellor_response": "",
                 "query_summary": "Candidate facts retrieved from long-term memory",
-                "established_facts": [x.get("fact_text", "") for x in facts if x.get("fact_text")],
+                "established_facts": [
+                    {"fact": x.get("fact_text", ""), "source_type": x.get("source_type") or "unknown", "source_reference": x.get("source_reference")}
+                    for x in facts if x.get("fact_text")
+                ],
                 "similarity": 1.0,
                 "created_at": facts[0].get("updated_at") if facts else None,
                 "memory_kind": "candidate_facts",
@@ -83,7 +89,7 @@ def memory_lookup_node(state: dict) -> dict:
             "memory_reused": found, "repeat_candidate": False,
         }
         logger.info("MEMORY CHECK | %s", log)
-        return {"candidate_id": candidate_id, "memory_context": context, "memory_reused": found,
+        return {"candidate_id": candidate_id, "session_id": session_id, "candidate_status": candidate_status, "memory_context": context, "memory_reused": found,
                 "memory_similarity": 1.0 if facts else 0.0, "repeat_candidate": False,
                 "global_cache_hit": False, "cached_response": None, "group_chat_log": [log]}
 
@@ -100,7 +106,7 @@ def memory_lookup_node(state: dict) -> dict:
                 "memory_reused": True, "repeat_candidate": False,
             }
             logger.info("GLOBAL CACHE | %s", log)
-            return {"candidate_id": candidate_id, "memory_context": [], "memory_reused": True,
+            return {"candidate_id": candidate_id, "session_id": session_id, "candidate_status": candidate_status, "memory_context": [], "memory_reused": True,
                     "memory_similarity": global_similarity, "repeat_candidate": False,
                     "global_cache_hit": True, "cached_response": best_global.get("answer", ""),
                     "group_chat_log": [log]}
@@ -123,7 +129,8 @@ def memory_lookup_node(state: dict) -> dict:
             "previous_counsellor_response": "",
             "query_summary": "Candidate facts retrieved from long-term memory",
             "established_facts": [
-                x.get("fact_text", "") for x in facts if x.get("fact_text")
+                {"fact": x.get("fact_text", ""), "source_type": x.get("source_type") or "unknown", "source_reference": x.get("source_reference")}
+                for x in facts if x.get("fact_text")
             ],
             "similarity": 1.0,
             "created_at": facts[0].get("updated_at") if facts else None,
@@ -163,6 +170,8 @@ def memory_lookup_node(state: dict) -> dict:
     logger.info("MEMORY CHECK | %s", log)
     return {
         "candidate_id": candidate_id,
+        "session_id": session_id,
+        "candidate_status": candidate_status,
         "memory_context": context,
         "memory_reused": found,
         "memory_similarity": similarity,
@@ -192,6 +201,7 @@ def _safe_for_global_cache(state: dict, user_text: str) -> bool:
 
 def memory_save_node(state: dict) -> dict:
     candidate_id = state.get("candidate_id") or state.get("student_id") or "default"
+    session_id = state.get("session_id") or "legacy"
     messages = state.get("messages", [])
     latest_user = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
     latest_ai = next((m.content for m in reversed(messages) if isinstance(m, AIMessage)), "")
@@ -200,11 +210,11 @@ def memory_save_node(state: dict) -> dict:
 
     facts = state.get("established_facts", []) or []
     episode_ok = candidate_memory.save({
-        "candidate_id": candidate_id, "user_message": latest_user,
+        "candidate_id": candidate_id, "session_id": session_id, "user_message": latest_user,
         "counsellor_response": latest_ai, "query_summary": state.get("query_summary", ""),
         "established_facts": facts,
     })
-    facts_ok = candidate_memory.save_facts(candidate_id, facts) if facts else False
+    facts_ok = candidate_memory.save_facts(candidate_id, facts, source_type="conversation", source_reference=session_id) if facts else False
     global_ok = False
     if _safe_for_global_cache(state, latest_user):
         global_ok = candidate_memory.save_global(latest_user, latest_ai, category="general")

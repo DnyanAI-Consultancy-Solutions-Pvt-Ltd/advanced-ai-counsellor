@@ -1,5 +1,6 @@
 import logging
 from typing import List, Optional, Dict, Any
+from uuid import uuid4
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -29,6 +30,7 @@ class MessageItem(BaseModel):
 class ChatRequest(BaseModel):
     messages: List[MessageItem]
     candidate_id: str = Field(default="default")
+    session_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -42,6 +44,9 @@ class ChatResponse(BaseModel):
     memory_reused: bool = False
     memory_saved: bool = False
     memory_similarity: float = 0.0
+    candidate_id: str = ""
+    session_id: str = ""
+    candidate_status: str = "new"
 
 
 @app.get("/")
@@ -62,9 +67,13 @@ async def chat_endpoint(request: ChatRequest):
         if not formatted_messages or not any(m.role == "user" for m in request.messages):
             raise HTTPException(status_code=422, detail="At least one user message is required.")
 
+        session_id = request.session_id or f"legacy-{request.candidate_id}"
+
         initial_state = {
             "messages": formatted_messages,
             "candidate_id": request.candidate_id,
+            "session_id": session_id,
+            "candidate_status": "new",
             "student_id": request.candidate_id,  # backward-compatible RAG alias
             "memory_context": [],
             "memory_reused": False,
@@ -102,6 +111,9 @@ async def chat_endpoint(request: ChatRequest):
             memory_reused=final_state.get("memory_reused", False),
             memory_saved=final_state.get("memory_saved", False),
             memory_similarity=float(final_state.get("memory_similarity", 0.0) or 0.0),
+            candidate_id=request.candidate_id,
+            session_id=session_id,
+            candidate_status=final_state.get("candidate_status", "new"),
         )
     except HTTPException:
         raise
@@ -115,6 +127,7 @@ async def upload_rag_document(
     file: UploadFile = File(...),
     candidate_id: str = Form("default"),
     doc_type: str = Form("candidate_document"),
+    scope: str = Form("candidate"),
 ):
     try:
         if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -127,6 +140,7 @@ async def upload_rag_document(
             filename=file.filename,
             student_id=candidate_id,
             doc_type=doc_type,
+            scope=scope,
         )
         return result
     except HTTPException:

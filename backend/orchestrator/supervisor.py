@@ -117,6 +117,17 @@ def supervisor_node(state: dict) -> dict:
         else "[No relevant candidate memory found]"
     )
 
+    rag_docs = state.get("retrieved_docs", []) or []
+    rag_lines = []
+    for doc in rag_docs:
+        metadata = doc.get("metadata") or {}
+        source = metadata.get("source_filename") or metadata.get("source") or "uploaded document"
+        content = str(doc.get("content", "") or "").strip()
+        if content:
+            scope = metadata.get("scope") or "candidate"
+            rag_lines.append(f"Scope: {scope} | Source: {source}\nContent: {content[:1800]}")
+    rag_text = "\n\n--- RAG document evidence ---\n".join(rag_lines) if rag_lines else "[No relevant uploaded document evidence found]"
+
     system_prompt = """
 You are the Supervisor of an advanced multi-agent
 AI Counselling System.
@@ -186,6 +197,21 @@ Repeated-query signal:
 
 Best memory similarity:
 {memory_similarity}
+
+UPLOADED DOCUMENT EVIDENCE
+
+Relevant candidate-private and/or global RAG evidence retrieved for this turn:
+{rag_context}
+
+SOURCE SELECTION RULES
+
+- Current user statements describe the current situation and take priority when they conflict with older sources.
+- Candidate memory is for durable personal facts and prior counselling continuity.
+- Candidate-scoped RAG is private evidence about this candidate. Global RAG is reusable shared learning/reference knowledge.
+- Never treat global knowledge as a personal fact about the candidate.
+- Do not assume retrieved RAG is relevant merely because it was retrieved. Use it only when it helps answer the current need or resolves an uncertainty.
+- Never invent a fact that is absent from current messages, candidate memory, and uploaded RAG.
+- If memory and RAG conflict and the conflict matters, preserve the conflict as an uncertainty rather than silently choosing one.
 
 MEMORY-RECALL REQUESTS
 
@@ -449,6 +475,7 @@ OUTPUT QUALITY
     inputs = {
         "messages": messages,
         "memory_context": memory_text,
+        "rag_context": rag_text,
         "repeat_candidate": str(bool(repeat_candidate)),
         "memory_similarity": f"{float(memory_similarity):.2f}",
         "available_agents": ", ".join(AVAILABLE_AGENTS),

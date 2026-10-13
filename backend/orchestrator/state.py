@@ -6,6 +6,8 @@ from langchain_core.messages import BaseMessage
 class CounsellingState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], operator.add]
     candidate_id: str
+    session_id: str  # one counselling conversation; candidate_id remains permanent
+    candidate_status: str  # "new" or "returning"
     student_id: str  # backward-compatible alias for existing RAG code
 
     # Remote candidate-specific memory
@@ -28,7 +30,7 @@ class CounsellingState(TypedDict, total=False):
     supervisor_can_answer: bool
 
     # Collaborative resolution
-    retrieved_docs: List[Dict[str, Any]]
+    retrieved_docs: List[Dict[str, Any]]  # candidate + global RAG evidence
     resolved_questions: List[str]
     remaining_questions: List[str]
     information_sufficient: bool

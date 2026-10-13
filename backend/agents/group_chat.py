@@ -234,16 +234,50 @@ def _rag_context(state: dict) -> List[dict]:
         or "default"
     )
 
+    docs = []
     try:
-        return rag_engine.search_student_documents(
-            query=query,
-            student_id=candidate_id,
-            k=4,
-        )
+        candidate_docs = rag_engine.search_student_documents(query=query, student_id=candidate_id, k=4)
+        for d in candidate_docs:
+            d.setdefault("metadata", {})["scope"] = "candidate"
+        docs.extend(candidate_docs)
     except Exception as exc:
         logger.warning("Candidate RAG retrieval skipped: %s", exc)
-        return []
+    try:
+        global_docs = rag_engine.search_global_documents(query=query, k=3)
+        for d in global_docs:
+            d.setdefault("metadata", {})["scope"] = "global"
+        docs.extend(global_docs)
+    except Exception as exc:
+        logger.warning("Global RAG retrieval skipped: %s", exc)
+    return docs
 
+
+
+def rag_lookup_node(state: dict) -> dict:
+    """Retrieve candidate-scoped uploaded-document evidence before Supervisor routing."""
+    docs = _rag_context(state)
+    sources = []
+    for doc in docs:
+        metadata = doc.get("metadata") or {}
+        source = metadata.get("source_filename") or metadata.get("source")
+        if source and source not in sources:
+            sources.append(str(source))
+
+    log = {
+        "type": "rag_check",
+        "sender": "RAG Knowledge",
+        "recipient": "Supervisor",
+        "status": "rag_context_found" if docs else "no_relevant_rag",
+        "message": (
+            f"Retrieved {len(docs)} candidate/global document chunk(s)"
+            + (f" from: {', '.join(sources)}." if sources else ".")
+            if docs
+            else "No relevant candidate document context found."
+        ),
+        "documents_found": len(docs),
+        "sources": sources,
+    }
+    return {"retrieved_docs": docs, "group_chat_log": [log]}
 
 
 def _prompt_safe(value) -> str:
@@ -380,7 +414,7 @@ def specialist_panel_node(state: dict) -> dict:
 
     messages = state.get("messages", [])[-20:]
 
-    docs = _rag_context(state)
+    docs = state.get("retrieved_docs", []) or _rag_context(state)
 
     rag_text = "\n\n".join(
         d.get("content", "")
@@ -566,34 +600,13 @@ COLLABORATION REQUIREMENTS:
 18. Only put something in new_question when discovering a genuinely
     NEW uncertainty that could materially change counselling direction.
 
-19. If a high-value unresolved question already exists, do NOT introduce
-    another question unless answering the new question BEFORE the existing
-    question would materially change the counselling path.
-
-20. Do not decompose an existing high-value question into several
-    exploratory profile questions.
-
-21. Additional useful dimensions such as values, interests, motivations,
-    preferences, strengths, background or priorities should normally be
-    offered as suggestions or explored in later counselling turns, rather
-    than added as simultaneous unresolved questions.
-
-22. Do not create a new emotional/wellbeing question merely because
+19. Do not create a new emotional/wellbeing question merely because
     emotional context exists. If useful supportive guidance can already
     be given from the established emotional signal, provide that guidance
     instead.
 
-23. Wellbeing guidance must match the intensity of the emotional signal
-    actually expressed by the user.
-
-    Do NOT escalate ordinary uncertainty, dissatisfaction, disappointment,
-    frustration or confusion into burnout, grief, significant distress,
-    anxiety, depression or another stronger emotional/mental-health framing
-    unless the conversation provides evidence for it.
-
-24. When an existing unresolved question already determines the immediate
-    counselling direction, preserve that question and contribute useful
-    guidance instead of generating another lower-priority unknown.
+20. If an existing unresolved question already captures the key missing
+    information, do not create a second lower-value question.
 
 Allowed specialist identifiers:
 {AVAILABLE_AGENTS}
@@ -923,20 +936,6 @@ DECISION RULES:
     clarification_question should normally be non-empty.
 
 14. Never expose private chain-of-thought.
-
-15. Before selecting a clarification question, apply the ACTION-CHANGE TEST:
-    different answers must lead to materially different next counselling actions.
-    If the same useful guidance can cover all likely answers, use CASE A.
-
-16. Prefer questions the user can answer from their own experience rather than
-    relying on third-party feedback that may not exist.
-
-17. Do not ask the user to choose between support types that can be offered
-    together, such as "strategies or resources".
-
-18. For interview-to-offer problems, when further diagnosis is genuinely useful,
-    prefer distinctions such as technical/case performance vs behavioural/
-    communication performance vs later-stage role-fit/positioning.
 """
 
     prompt = ChatPromptTemplate.from_messages(
@@ -1115,6 +1114,9 @@ Established facts:
 Relevant candidate memory:
 {_prompt_safe(state.get('memory_context', []) or '[none]')}
 
+Relevant uploaded RAG evidence:
+{_prompt_safe(state.get('retrieved_docs', []) or '[none]')}
+
 Required clarification:
 {_prompt_safe(question)}
 
@@ -1203,6 +1205,9 @@ Reasonable but UNCONFIRMED inferences:
 
 Relevant candidate memory:
 {_prompt_safe(state.get('memory_context', []) or '[none]')}
+
+Relevant uploaded RAG evidence:
+{_prompt_safe(state.get('retrieved_docs', []) or '[none]')}
 
 Internal specialist conclusions:
 {_prompt_safe(internal_discussion)}
