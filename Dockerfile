@@ -6,20 +6,21 @@ ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# System dependencies
+# System dependencies (Added nginx here)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first for better Docker caching
 COPY requirements.txt .
-
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application
+# Copy application code and nginx config
 COPY . .
+COPY nginx.conf /etc/nginx/nginx.conf
 
 # Hugging Face Docker Spaces expose port 7860
 EXPOSE 7860
